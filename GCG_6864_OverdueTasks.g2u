@@ -1,0 +1,261 @@
+﻿Program.Sub.Preflight.Start
+v.Global.sError.Declare(String)
+V.Global.sFilePath.Declare(String)
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Author: Arturo Almaguer
+'Date: 8/10/22
+'Customer: Metalia MS SA de CV, quote number 13596
+'This program sends emails for overdue Cause and Corrective Action tasks.
+'This script is launched off the task scheduler every day as an automated task.
+
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+
+F.Intrinsic.Control.Try
+
+	V.Local.sAllUsers.Declare(String)
+	V.Local.iCounter.Declare(Long)
+	V.Local.sUser.Declare(String)
+	V.Local.sGroups.Declare(String)
+	V.Local.sUserOrGroup.Declare(String)
+	V.Local.sSQL.Declare(String)
+	
+	'Calling subs to verify if directories exist
+	F.Intrinsic.Control.CallSub("CheckTemplateDir")
+	F.Intrinsic.Control.CallSub("CheckTempDir")
+	
+	'Creating dt from all GS Users
+	f.ODBC.Connection!Con.OpenCompanyConnection
+	F.Global.Security.GetAllUsers(V.Caller.CompanyCode, V.Local.sAllUsers)
+	F.Data.DataTable.CreateFromString("dtAllUsers", V.Local.sAllUsers, "USER", "String", "", "*!*")
+	
+	'Looping through dt 
+	F.Intrinsic.Control.For(V.Local.iCounter, 0, V.DataTable.dtAllUsers.RowCount--, 1)
+		
+		'Validating if user is part of a GS Group
+		V.Local.sUser.Set(V.DataTable.dtAllUsers(V.Local.iCounter).USER!FieldValTrim)
+		F.Global.Security.GetUserGroups(V.Local.sUser, V.Caller.CompanyCode, V.Local.sGroups)
+		f.Intrinsic.String.Replace(V.Local.sGroups, "*!*", "','", V.Local.sGroups)
+		F.Intrinsic.String.Build("{0}','{1}", V.Local.sUser, V.Local.sGroups, V.Local.sUserOrGroup)
+		
+		'Retrieving all corrective actions the user is assinged to either as a single user or group and creating new dt
+		F.Intrinsic.String.Build("select A.CNCA_NO, A.CNCA_SEQ, A.DUE_DATE, B.FLAG_DONE, RTRIM(B.AUTH_LIST) AUTH_LIST, RTRIM(C.STEP_DESCRIPTION) STEP_DESCRIPTION, RTRIM(C.AUTH_USER1) AUTH_USER1, RTRIM(C.AUTH_USER2) AUTH_USER2, RTRIM(C.AUTH_USER3) AUTH_USER3 from GCG_6864_DUEDATES A LEFT JOIN V_CNCA B ON A.CNCA_NO = B.CNCA_NO and A.CNCA_SEQ = B.CNCA_SEQ LEFT JOIN V_CNCA_AUTH_LIST C ON B.CNCA_SEQ = cast(C.AUTH_SEQ as int) and B.AUTH_LIST = C.AUTH_LIST where A.DUE_DATE < '{0}' and B.FLAG_DONE <> 'Y' and (C.AUTH_USER1 in ('{1}') or C.AUTH_USER2 in ('{1}') or C.AUTH_USER3 in ('{1}')) order by A.CNCA_NO, A.CNCA_SEQ;", V.Ambient.Date.PervasiveDate, V.Local.sUserOrGroup, V.Local.sSQL)
+		f.Data.DataTable.CreateFromSQL("dtOverdueTasks", "Con", V.Local.sSQL, True)
+		
+		'If there is at least one record, then user has overdue tasks.
+		F.Intrinsic.Control.If(V.DataTable.dtOverdueTasks.RowCount, >, 0)
+		
+			'Calling subs to create excel file and queue email
+			F.Intrinsic.Control.CallSub("WriteToSpreadsheet", "User", V.Local.sUser)
+			F.Intrinsic.Control.CallSub("QueueEmail", "User", V.Local.sUser)
+			
+		F.Intrinsic.Control.EndIf
+		
+		'Closing dt
+		F.Data.DataTable.Close("dtOverdueTasks")
+		
+	F.Intrinsic.Control.Next(V.Local.iCounter)
+	
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.QueueEmail.Start
+'This subroutine queues the email so it can be later sent by Courier.
+'V.Args.User
+
+F.Intrinsic.Control.Try
+
+	V.Local.iUserID.Declare(Long)
+	V.Local.sSender.Declare(String)
+	V.Local.sSenderEmail.Declare(String)
+	V.Local.sSenderName.Declare(String)
+	V.Local.sSubject.Declare(String)
+	V.Local.sBody.Declare(String)
+	V.Local.sRecipientEmail.Declare(String)
+	V.Local.sRecipientName.Declare(String)
+	V.Local.sRecipient.Declare(String)
+	V.Local.sFilePath.Declare(String)
+	V.Local.sAttachment.Declare(String)
+	V.Local.sAttachmentPath.Declare(String)
+
+	'Getting User ID
+	F.Global.Security.GetUserID(V.Caller.User, V.Caller.CompanyCode, V.Local.iUserID)
+	
+	'Setting Subject
+	V.Local.sSubject.Set("ARC 6864 Acciones Correctivas Vencidas")
+
+	'''Building sender parameter
+	'Get email address of GS User
+	F.Global.Security.GetUserEmail(V.Caller.User, V.Local.sSenderEmail)
+	
+	'Alert and end script if no email found for GS User
+	F.Intrinsic.control.If(V.Local.sSenderEmail,=,"")
+		F.Intrinsic.UI.Msgbox("Error in email procedure.  The GS User does not have an email address associated with it in User Security Maintenance.")
+		F.Intrinsic.Control.CallSub("FormEmail_UnLoad")
+	F.Intrinsic.Control.EndIf
+	
+	'Getting full name of GS User
+	F.Global.Security.GetFullName(V.Caller.User, V.Caller.CompanyCode, V.Local.sSenderName)
+	
+	'Setting Sender Info for Queue Message
+	f.Intrinsic.String.Concat(V.Local.sSenderEmail,"*!*", V.Local.sSenderName, V.Local.sSender)
+	'''
+	
+	'Building recipients parameter
+	F.Global.Security.GetUserEmail(V.Args.User, V.Local.sRecipientEmail)
+	F.Global.Security.GetFullName(V.Args.User, V.Caller.CompanyCode, V.Local.sRecipientName)
+	F.Intrinsic.String.Build("{0}*!*{1}", V.Local.sRecipientName, V.Local.sRecipientEmail, V.Local.sRecipient)
+	
+	'Building body
+	f.Intrinsic.String.Build("Estimad@ {0},{1}", V.Local.sRecipientName, v.Ambient.NewLine, v.Local.sBody)
+	f.Intrinsic.String.Build("{0}{1}En el archivo adjunto podras encontrar todas las acciones correctivas a las que te encuentras asignado(a) y ya han vencido. Favor de revisar el archivo y dirigete al modulo de calidad para cerrar dichas acciones.", v.Local.sBody, v.Ambient.NewLine, v.Local.sBody)
+	f.Intrinsic.String.Build("{0}{1}{1}Gracias.", v.Local.sBody, v.Ambient.NewLine, v.Local.sBody)
+	
+	'Getting attachment location
+	F.Intrinsic.String.Build("{0}\", V.Global.sFilePath, V.Local.sFilePath)
+	F.Intrinsic.File.GetFileList(v.Local.sFilePath, "", V.Local.sAttachment)
+	F.Intrinsic.String.Split(V.Local.sAttachment, ":", V.Local.sAttachment)
+	F.Intrinsic.String.Build("{0}*!*{1}", V.Local.sAttachment(V.Local.sAttachment.UBound), V.Local.sFilePath, V.Local.sAttachmentPath)
+	
+	'Creating message, which will be sent by courier.
+	F.Global.Messaging.QueueMessage(V.Caller.CompanyCode,V.Local.iUserID,"GCG_6864",V.Local.sSubject,V.Local.sSender, V.Local.sRecipient, V.Local.sBody,5,"",False,"","","","","","","", V.Local.sAttachmentPath, True,"")
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.QueueEmail.End
+
+Program.Sub.CatchError.Start
+'To display the error
+F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Ambient.ScriptPath, V.Ambient.Newline, V.Ambient.SubroutineCalledFrom, V.Ambient.ErrorNumber, V.Ambient.ErrorDescription, V.Ambient.GABVersion, V.Global.sError) 
+F.Intrinsic.UI.Msgbox(V.Global.sError)
+F.Intrinsic.Control.CallSub("Unload")
+Program.Sub.CatchError.End
+
+Program.Sub.Unload.Start
+'Closes the connection if it is open
+f.Intrinsic.Control.If(v.ODBC.con.exists,=,"1") 	
+    f.ODBC.Connection!Con.Close
+f.Intrinsic.Control.EndIf
+
+'Ending program
+F.Intrinsic.Control.End
+Program.Sub.Unload.End
+
+Program.Sub.CheckTempDir.Start
+'This subroutine deletes existing directory and creates it back again.
+
+F.Intrinsic.Control.Try
+
+	V.Local.sPath.Declare(String)
+	V.Local.bExists.Declare(Boolean)
+	V.Local.sError.Declare(String)
+	
+	F.Intrinsic.String.Build("{0}\CUSTOM\6864\Files", V.Caller.GlobalDir, V.Local.sPath)
+	
+	F.Intrinsic.File.DirExists(V.Local.sPath, V.Local.bExists)
+	F.Intrinsic.Control.If(V.Local.bExists)
+		
+		'Deletes directory to delete all previous subfolders and files
+		F.Intrinsic.File.DeleteDir(V.Local.sPath, True) 
+
+	F.Intrinsic.Control.EndIf
+	
+	'Creates directory
+	F.Intrinsic.File.CreateDir(V.Local.sPath)
+		
+	'Setting value to global variable
+	V.Global.sFilePath.Set(V.Local.sPath)
+	
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.CheckTempDir.End
+
+Program.Sub.CheckTemplateDir.Start
+'This subroutine validates if directory exists, creates it if it doesn't.
+
+F.Intrinsic.Control.Try
+
+	V.Local.sPath.Declare(String)
+	V.Local.bExists.Declare(Boolean)
+	V.Local.sError.Declare(String)
+	
+	F.Intrinsic.String.Build("{0}\CUSTOM\6864\Template", V.Caller.GlobalDir, V.Local.sPath)
+	
+	F.Intrinsic.File.DirExists(V.Local.sPath, V.Local.bExists)
+	F.Intrinsic.Control.If(V.Local.bExists.Not)
+	
+		'Creates directory if it doesn't exist
+		F.Intrinsic.File.CreateDir(V.Local.sPath)
+	
+	F.Intrinsic.Control.EndIf
+	
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.CheckTemplateDir.End
+
+Program.Sub.WriteToSpreadsheet.Start
+'This suborutine
+'V.Args.User
+
+F.Intrinsic.Control.Try
+
+	v.Local.iCounter.Declare(Long)
+	v.Local.sTableHeader.Declare(String, "Acciones Correctivas Vencidas")
+	v.Local.sTableTitles.Declare(String, "Fecha*!*Dias Vencidos*!*Accion*!*No.*!*Descripcion")
+	v.Local.sExportData.Declare(String)
+	v.Local.sTemplatePath.Declare(String)
+	v.Local.sFileOutput.Declare(String)
+	v.Local.sTemp.Declare(String)
+	v.Local.sData.Declare(String)
+	v.Local.sDueDate.Declare(Date)
+	v.Local.iDays.Declare(Long)
+	
+	'Looping through all user's overdue tasks
+	F.Intrinsic.Control.For(V.Local.iCounter, 0, V.DataTable.dtOverdueTasks.RowCount--, 1)
+		
+		'Building string to store data in desired format
+		'row delimiter $!$, column delimiter *!*
+		v.Local.sDueDate.Set(V.DataTable.dtOverdueTasks(V.Local.iCounter).DUE_DATE!FieldVal)
+		F.Intrinsic.Date.DateDiff("D", v.Local.sDueDate, V.Ambient.Date, v.Local.iDays)
+		F.Intrinsic.String.Build("{0}*!*{1}*!*{2}*!*{3}*!*{4}", v.Local.sDueDate, v.Local.iDays, V.DataTable.dtOverdueTasks(V.Local.iCounter).STEP_DESCRIPTION!FieldValTrim, V.DataTable.dtOverdueTasks(V.Local.iCounter).CNCA_NO!FieldVal, V.DataTable.dtOverdueTasks(V.Local.iCounter).AUTH_LIST!FieldValTrim, V.Local.sTemp)
+		V.Local.sData.Append(V.Local.sTemp)
+		
+		f.Intrinsic.Control.If(V.Local.iCounter, <>, V.DataTable.dtOverdueTasks.RowCount--)
+			v.Local.sData.Append("$!$")
+		f.Intrinsic.Control.EndIf
+			
+	F.Intrinsic.Control.Next(V.Local.iCounter)
+	
+	'Building variables to be used in .WriteSpreadsheet function
+	f.Intrinsic.String.Build("{0}$!${1}$!${2}$!${3}", "", v.Local.sTableHeader, v.Local.sTableTitles, v.Local.sData, v.Local.sExportData)
+	F.Intrinsic.String.Build("{0}\CUSTOM\6864\Template\GCG_6864_Template.xlsx", V.Caller.GlobalDir, V.Local.sTemplatePath)
+	f.Intrinsic.String.Build("{0}\CUSTOM\6864\Files\Acciones Vencidas {1}.xlsx", v.Caller.GlobalDir, V.Args.User, v.Local.sFileOutput)
+	
+	f.Automation.MSExcel.WriteSpreadsheet(v.Local.sFileOutput, v.Local.sTemplatePath, v.Local.sExportData)
+	
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.WriteToSpreadsheet.End
+
+Program.Sub.Comments.Start
+${$5$}$20.1.8223.27623$}$1
+${$6$}$apadilla$}$20220822161945140$}$Lag9STqBJOmNXSbd5+msRcBWPGz0aFqSzPePUG9qWbxxdZvpSnJIHu+uxlF7pnNzcB9AwCNYiDgk6MIZq+62BQ==
+Program.Sub.Comments.End
