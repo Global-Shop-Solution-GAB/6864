@@ -1,0 +1,242 @@
+﻿Program.Sub.ScreenSU.Start
+Gui.FormActions..Create(BaseForm)
+Gui.FormActions..Caption("ARC 6864 - Fechas de Vencimiento en Causa y Accion Correctiva")
+Gui.FormActions..Size(626,508)
+Gui.FormActions..MinX(0)
+Gui.FormActions..MinY(0)
+Gui.FormActions..Position(0,0)
+Gui.FormActions..AlwaysOnTop(False)
+Gui.FormActions..FontName("Tahoma")
+Gui.FormActions..FontSize(8.25)
+Gui.FormActions..ControlBox(True)
+Gui.FormActions..MaxButton(True)
+Gui.FormActions..MinButton(True)
+Gui.FormActions..MousePointer(0)
+Gui.FormActions..Moveable(True)
+Gui.FormActions..Sizeable(True)
+Gui.FormActions..ShowInTaskBar(True)
+Gui.FormActions..TitleBar(True)
+Gui.FormActions..ShowCompanyCode(False)
+Gui.FormActions..Event(UnLoad,FormActions_UnLoad)
+Gui.FormActions.gsgcActions.Create(GsGridControl)
+Gui.FormActions.gsgcActions.Enabled(True)
+Gui.FormActions.gsgcActions.Visible(True)
+Gui.FormActions.gsgcActions.Zorder(0)
+Gui.FormActions.gsgcActions.Size(603,423)
+Gui.FormActions.gsgcActions.Position(11,42)
+Gui.FormActions.cmdSave.Create(Button)
+Gui.FormActions.cmdSave.Enabled(True)
+Gui.FormActions.cmdSave.Visible(True)
+Gui.FormActions.cmdSave.Zorder(0)
+Gui.FormActions.cmdSave.Size(75,23)
+Gui.FormActions.cmdSave.Position(535,11)
+Gui.FormActions.cmdSave.Caption("Guardar")
+Gui.FormActions.cmdSave.FontName("Tahoma")
+Gui.FormActions.cmdSave.FontSize(8.25)
+Gui.FormActions.cmdSave.Event(Click,cmdSave_Click)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+V.Global.sError.Declare(String)
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Author: Arturo Almaguer
+'Date: 8/9/22
+'Customer: Metalia MS SA de CV, quote number 13596
+'This program allows the user to set a due date for each action in the Cause and Corrective Action screen
+'This script is launched off hooks 41210 and 41280
+
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+
+F.Intrinsic.Control.Try
+
+	v.Local.sSQL.Declare(String)
+	v.Local.iCNCA.Declare(Long)
+	
+	F.Intrinsic.Control.SelectCase(V.Caller.Hook)
+		
+		F.Intrinsic.Control.Case(41210)
+		'SO Header populate hook
+		
+			'Changing Script 1 button caption
+			V.Passed.000084.Set("Due Dates")
+		
+		F.Intrinsic.Control.Case(41280)
+		'SO Header Script 1 hook
+			
+			'Validating whether custom table exists or not
+			F.Intrinsic.Control.CallSub("CheckTable")
+			
+			'Setting CNCA number from passed variable
+			V.Local.iCNCA.Set(V.Passed.000008)		
+			
+			'Loading data
+			F.ODBC.Connection!Con.OpenCompanyConnection
+			F.Intrinsic.String.Build("select A.CNCA_NO, A.CNCA_SEQ, RTRIM(B.STEP_DESCRIPTION) STEP_DESCRIPTION, C.DUE_DATE from V_CNCA A LEFT JOIN V_CNCA_AUTH_LIST B ON A.CNCA_SEQ = cast(B.AUTH_SEQ as int) and A.AUTH_LIST = B.AUTH_LIST LEFT JOIN GCG_6864_DUEDATES C ON A.CNCA_NO = C.CNCA_NO and A.CNCA_SEQ = C.CNCA_SEQ where A.CNCA_NO = '{0}';", V.Local.iCNCA, V.Local.sSQL)
+			f.Data.DataTable.CreateFromSQL("dtActions", "Con", V.Local.sSQL, True)
+			F.ODBC.Connection!Con.Close
+			
+			'Calling sub to format grid
+			F.Intrinsic.Control.CallSub("LoadGrid")
+			
+			GUI.FormActions..Show
+			
+	F.Intrinsic.Control.EndSelect
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.CheckTable.Start
+'This subroutine verifies if tables exists in DB, creates it if it doesn't
+F.Intrinsic.Control.Try
+
+	V.Local.bExists.Declare(Boolean)
+	
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	F.ODBC.Connection!Con.TableExists("GCG_6864_DUEDATES", V.Local.bExists)
+		F.Intrinsic.Control.If(V.Local.bExists, =, False)
+			F.ODBC.Connection!Con.Execute("CREATE TABLE GCG_6864_DUEDATES (CNCA_NO INTEGER, CNCA_SEQ INTEGER, DUE_DATE DATE);")
+		F.Intrinsic.Control.EndIf
+	F.ODBC.Connection!Con.Close
+
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.CheckTable.End
+
+Program.Sub.LoadGrid.Start
+'This subroutine formats the grid
+
+F.Intrinsic.Control.Try
+
+	GUI.FormActions.gsgcActions.AddGridviewFromDatatable("gvActions", "dtActions")
+	
+	'General Gridview properties
+	GUI.FormActions.gsgcActions.SetGridviewProperty("gvActions", V.Enum.GridViewPropertyNames!EnableAppearanceOddRow, True)
+	GUI.FormActions.gsgcActions.SetGridviewProperty("gvActions", V.Enum.GridViewPropertyNames!RowAutoHeight, True)
+	GUI.FormActions.gsgcActions.SetGridviewProperty("gvActions", V.Enum.GridViewPropertyNames!ColumnPanelRowHeight, 45)
+	GUI.FormActions.gsgcActions.SetGridviewProperty("gvActions", V.Enum.GridViewPropertyNames!EnableAppearanceFocusedRow, True) 
+	GUI.FormActions.gsgcActions.SetGridviewProperty("gvActions", V.Enum.GridViewPropertyNames!ShowAutoFilterRow, True) 
+	GUI.FormActions.gsgcActions.SetGridviewProperty("gvActions", "OptionsViewColumnAutoWidth", False) 'It allows the user to adjust the column widths
+	
+	'Column properties
+	'Invisible columns
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "CNCA_NO", V.Enum.ColumnPropertyNames!Visible, False)
+	
+	'Formatting captions
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "CNCA_SEQ", V.Enum.ColumnPropertyNames!Caption, "Step")
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "STEP_DESCRIPTION", V.Enum.ColumnPropertyNames!Caption, "Descripcion")
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!Caption, "Fecha de Vencimiento")
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!HeaderWordWrap, "Wrap")
+
+	'Formatting headers
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "CNCA_SEQ", V.Enum.ColumnPropertyNames!HeaderFontBold, True)
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "STEP_DESCRIPTION", V.Enum.ColumnPropertyNames!HeaderFontBold, True)
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!HeaderFontBold, True)
+	
+	'Formatting headers allignment
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "CNCA_SEQ", V.Enum.ColumnPropertyNames!HeaderHAlignment, "Center")
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "STEP_DESCRIPTION", V.Enum.ColumnPropertyNames!HeaderHAlignment, "Center")
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!HeaderHAlignment, "Center")
+	
+	'Formatting widths
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "CNCA_SEQ", V.Enum.ColumnPropertyNames!MaxWidth, 60)
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "STEP_DESCRIPTION", V.Enum.ColumnPropertyNames!MinWidth, 400)
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!MinWidth, 100)
+	
+	'Enable DUE_DATE column to be checked/unchecked
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!AllowEdit, True)
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!ReadOnly, False)
+	
+	'Formatting date columns to show only date
+	GUI.FormActions.gsgcActions.SetColumnProperty("gvActions", "DUE_DATE", V.Enum.ColumnPropertyNames!DisplayCustomDateTime, "d")
+	
+	'Displaying gv
+	GUI.FormActions.gsgcActions.MainView("gvActions")
+	GUI.FormActions.gsgcActions.Visible(True)
+
+F.Intrinsic.Control.Catch
+	
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.LoadGrid.End
+
+Program.Sub.CatchError.Start
+'To display the error
+F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}", V.Ambient.ScriptPath, V.Ambient.Newline, V.Ambient.SubroutineCalledFrom, V.Ambient.ErrorNumber, V.Ambient.ErrorDescription, V.Ambient.GABVersion, V.Global.sError) 
+F.Intrinsic.UI.Msgbox(V.Global.sError)
+F.Intrinsic.Control.CallSub("FormActions_UnLoad")
+Program.Sub.CatchError.End
+
+Program.Sub.FormActions_UnLoad.Start
+'Closing the connection if it is open
+f.Intrinsic.Control.If(v.ODBC.con.exists,=,"1") 	
+    f.ODBC.Connection!Con.Close
+f.Intrinsic.Control.EndIf
+
+'Closing screen whenever the email form is closed out
+GUI.FormActions..Visible(False)
+
+'Ending program
+F.Intrinsic.Control.End
+Program.Sub.FormActions_UnLoad.End
+
+Program.Sub.cmdSave_Click.Start
+'This subroutine saves the selected due dates to the custom table
+
+F.Intrinsic.Control.Try
+
+	V.Local.iCounter.Declare(Long)
+	v.Local.sSQL.Declare(String)
+	v.Local.dDueDate.Declare(Date)
+	
+	F.ODBC.Connection!Con.OpenCompanyConnection
+	F.Intrinsic.Control.For(V.Local.iCounter, 0, V.DataTable.dtActions.RowCount--, 1)
+		
+		F.Intrinsic.Control.If(V.DataTable.dtActions(V.Local.iCounter).DUE_DATE!FieldVal, <>, "")
+			
+			'Setting due date to selected date
+			v.Local.dDueDate.Set(V.DataTable.dtActions(V.Local.iCounter).DUE_DATE!FieldVal)
+			
+			'Validating if a record alredy exists for the same CNCA and SEQ
+			F.Intrinsic.String.Build("select * from GCG_6864_DUEDATES where CNCA_NO = '{0}' and CNCA_SEQ = '{1}';", V.DataTable.dtActions(V.Local.iCounter).CNCA_NO!FieldVal, V.DataTable.dtActions(V.Local.iCounter).CNCA_SEQ!FieldVal, V.Local.sSQL)
+			F.ODBC.Connection!Con.ExecuteAndReturn(V.Local.sSQL, V.Local.sSQL)
+			
+			'Inserting new record if there are no results, updating record if there is one.
+			F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF, =, True)
+				Function.Intrinsic.String.Build("insert into GCG_6864_DUEDATES (CNCA_NO, CNCA_SEQ, DUE_DATE) values('{0}','{1}','{2}');", V.DataTable.dtActions(V.Local.iCounter).CNCA_NO!FieldVal, V.DataTable.dtActions(V.Local.iCounter).CNCA_SEQ!FieldVal, v.Local.dDueDate.PervasiveDate, V.Local.sSQL)
+			F.Intrinsic.Control.Else
+				F.Intrinsic.String.Build("update GCG_6864_DUEDATES set DUE_DATE = '{0}' where CNCA_NO = '{1}' and CNCA_SEQ = '{2}';", v.Local.dDueDate.PervasiveDate, V.DataTable.dtActions(V.Local.iCounter).CNCA_NO!FieldVal, V.DataTable.dtActions(V.Local.iCounter).CNCA_SEQ!FieldVal, V.Local.sSQL)
+			F.Intrinsic.Control.EndIf
+			
+			'Executing SQL statement
+			F.ODBC.Connection!Con.Execute(V.Local.sSQL)
+		
+		F.Intrinsic.Control.EndIf
+	
+	F.Intrinsic.Control.Next(V.Local.iCounter)
+	F.ODBC.Connection!Con.Close
+	
+	'Displaying msg box as confirmation
+	F.Intrinsic.UI.Msgbox("Las fechas de vencimiento han sido guardadas correctamente.", "Exito")
+	
+F.Intrinsic.Control.Catch
+
+	F.Intrinsic.Control.CallSub(CatchError)
+	
+F.Intrinsic.Control.EndTry
+Program.Sub.cmdSave_Click.End
+
+Program.Sub.Comments.Start
+${$5$}$20.1.8223.27623$}$1
+${$6$}$apadilla$}$20220823162356492$}$Lag9STqBJOmNXSbd5+msRcBWPGz0aFqSzPePUG9qWbwKqjxAeWNRB0kd+gXVEjbspto4iT1XHLzjQtfnDCiZSg==
+Program.Sub.Comments.End
